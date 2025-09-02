@@ -1,0 +1,768 @@
+Venlyn Ops – Functional Blueprint (v1)
+System baseline
+
+FE: Next.js App Router, Server Components, RSC data fetching, TanStack Query for client revalidate, Zustand for UI state, shadcn/ui for primitives. Keyboard palette ⌘K.
+
+BE: Next.js API routes (or tRPC), background workers (BullMQ/Redis or Cloud Tasks). Webhooks for telephony vendor.
+
+DB: Postgres + Prisma. Row-level workspace_id scoping.
+
+Realtime: WebSocket (Ably/Supabase Realtime) for live calls, job updates.
+
+Storage: S3 (recordings, transcripts, images).
+
+Vendors: Retell (AI voice runtime), Twilio (DIDs/SMS/A2P), Google/Microsoft Calendar.
+
+RBAC roles: owner, admin, dispatcher, tech, viewer.
+
+Data model (DDL sketch)
+-- Multitenancy
+create table workspaces(
+  id uuid pk, name text not null, tz text not null default 'America/New_York',
+  created_at timestamptz default now()
+);
+
+create table users(
+  id uuid pk, email citext unique, name text, created_at timestamptz default now()
+);
+
+create table workspace_users(
+  workspace_id uuid references workspaces(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  role text check (role in ('owner','admin','dispatcher','tech','viewer')),
+  primary key(workspace_id, user_id)
+);
+
+-- Core
+create table contacts(
+  id uuid pk, workspace_id uuid references workspaces(id) on delete cascade,
+  name text, phones text[] not null, email text, address jsonb,
+  notes text, last_seen_at timestamptz, created_at timestamptz default now()
+);
+
+create table calls(
+  id uuid pk, workspace_id uuid references workspaces(id) on delete cascade,
+  started_at timestamptz, ended_at timestamptz, duration_sec int,
+  direction text check(direction in ('in','out')),
+  from_e164 text, to_e164 text, contact_id uuid references contacts(id),
+  agent_type text check(agent_type in ('ai','human')),
+  intent text, disposition text check(disposition in ('answered','missed','booked','spam','callback')),
+  value_est_cents int, emergency_score int, spam_score int,
+  recording_url text, transcript_url text, transcript jsonb,
+  job_id uuid, escalation_status text check(escalation_status in ('none','queued','sent','acked')),
+  vendor_payload jsonb, created_at timestamptz default now()
+);
+
+create table jobs(
+  id uuid pk, workspace_id uuid references workspaces(id) on delete cascade,
+  title text, status text check(status in ('new','scheduled','en_route','on_site','done','cancelled')),
+  slot_start timestamptz, slot_end timestamptz, address jsonb,
+  contact_id uuid references contacts(id), source_call_id uuid references calls(id),
+  assigned_to uuid references users(id), estimate_cents int, final_cents int,
+  checklist jsonb, photos jsonb, signature_url text,
+  calendar_event_id text, notes text, created_at timestamptz default now()
+);
+
+create table numbers(
+  id uuid pk, workspace_id uuid references workspaces(id) on delete cascade,
+  e164 text unique, label text, status text check(status in ('active','suspended')),
+  routing_mode text check(routing_mode in ('ai','human','overflow')),
+  hours jsonb, after_hours text check(after_hours in ('ai','vm','forward')) default 'ai',
+  overflow_target jsonb, minute_budget_cap int, recording_opt_in boolean default true,
+  a2p_brand_status text, a2p_campaign_status text, created_at timestamptz default now()
+);
+
+create table agent_configs(
+  id uuid pk, workspace_id uuid references workspaces(id) on delete cascade,
+  name text, model text, voice_id text, temperature numeric,
+  system_prompt text, safety_rules jsonb, escalation_rules jsonb,
+  booking_rules jsonb, sop_bindings uuid[], tools_enabled text[],
+  pii_redaction boolean default true, version int default 1,
+  status text check(status in ('draft','published')) default 'published',
+  created_at timestamptz default now()
+);
+
+create table sops(
+  id uuid pk, workspace_id uuid references workspaces(id) on delete cascade,
+  title text, category text, content_md text, version int default 1,
+  published boolean default false, created_at timestamptz default now()
+);
+
+create table audit_events(
+  id bigserial pk, workspace_id uuid, actor_type text, actor_id uuid,
+  action text, target_type text, target_id uuid, diff jsonb, ts timestamptz default now()
+);
+
+create index calls_ws_time on calls(workspace_id, started_at desc);
+create index jobs_ws_time on jobs(workspace_id, slot_start desc);
+create index contacts_ws_phone on contacts using gin(phones);
+
+Global UX patterns (non-visual rules)
+
+Topbar: workspace switcher, global search (⌘K → contacts, calls, jobs, numbers), notifications, profile.
+
+Drawers: right-side for details (Call, Job, Contact). All rows open in drawer by default; deep linkable /calls/:id.
+
+Table controls: date range, saved filters, export CSV.
+
+Toasts w/ undo for destructive ops; confirmations for routing/billing/A2P.
+
+Optimistic update for tag/notes changes; server reconcile on error.
+
+Permission gates: show but disable with tooltip explaining why; log denied events.
+
+Pages (with exact behavior)
+1) Overview /
+
+Purpose: at-a-glance health + next actions.
+
+Widgets
+
+KPI Row
+
+AnsweredRate = answered / total in date range.
+
+Bookings = calls with disposition='booked'.
+
+MissedValue = sum(value_est) where disposition='missed'.
+
+AvgHandleTime = avg(duration) for answered calls.
+
+Each shows Δ% vs previous period; click → filtered Calls table.
+
+Trends
+
+Line: calls/day split by answered/missed.
+
+Doughnut: intent mix.
+
+Queues
+
+Needs Review: calls where agent_type='ai' AND escalation_status='queued' OR transcript flagged uncertain=true.
+
+Emergencies w/o Job: intent='emergency' AND job_id is null.
+
+Today
+
+Upcoming jobs (calendar), status chips; click → Job drawer; “Notify ETA” sends SMS.
+
+Alerts
+
+A2P incomplete; minute cap >80%; after-hours missed >= N; webhook fail.
+
+Events
+
+On mount fetch aggregated analytics using materialized view or cached rollups.
+
+Realtime updates: when calls insert, update KPIs + queues.
+
+Acceptance
+
+All widgets link to concrete filtered views.
+
+Empty state shows setup checklist if no numbers or agent config.
+
+2) Calls List /calls
+
+Columns
+
+Time, Caller (name or E.164), Intent (badge), Disposition, Duration, Recording (Play), Value est., Agent (AI/Human), Tags, Source Number.
+
+Filters
+
+Date range (absolute/relative).
+
+Intent multi-select.
+
+Disposition.
+
+Agent type.
+
+Value range.
+
+“Has job”, “Needs review”, “Emergency”.
+
+Row actions
+
+Click row → Call Drawer.
+
+Bulk actions: tag, assign to job (existing/new), mark spam, export.
+
+Realtime
+
+Insert new row at top for incoming calls; animate.
+
+Keyboard
+
+Up/Down navigate; Enter opens drawer; E mark emergency; J create job.
+
+Export
+
+CSV of current filter; enqueue job → email link on completion.
+
+Acceptance
+
+Filter persistence in URL query.
+
+Server pagination (cursor), 50/pg.
+
+3) Call Detail Drawer /calls/:id
+
+Header
+
+Caller name/number, intent badge, disposition chip, dollar estimate.
+
+Tabs
+
+Summary
+
+Key fields, linked Contact mini-card, linked Job (if any).
+
+“Create Job” primary when job_id null.
+
+“Escalate Now” → sends notification to on-call.
+
+Transcript
+
+Side-by-side audio waveform + transcript paragraphs with timestamps.
+
+Redacted PII view toggle; unredact requires admin + confirmation.
+
+Jump to quote → seek audio.
+
+Details
+
+Vendor payload JSON viewer; STT confidence; latency stats; tokens used (if available).
+
+Tags & Notes
+
+Freeform tags, internal notes; @mention users (sends email).
+
+AI QA block
+
+“Why this intent?” small explainer using extracted entities (symptoms, address, preferred time).
+
+“Confidence” scalar; if < threshold, mark for review automatically.
+
+Actions
+
+Create Job: opens Job create modal prefilled (contact/address/time window) → upon save:
+
+Update calls.job_id.
+
+Send SMS “Booked for {slot}”.
+
+Create calendar event if integration enabled.
+
+Escalate: set escalation_status='sent' + notify channel (email/SMS/slack webhook).
+
+Mark spam: sets disposition='spam', reduces value_est to 0, updates model feedback queue.
+
+Acceptance
+
+Audio streamable; transcript searchable; every edit -> audit_events.
+
+4) Live Monitor /calls/live (optional v1.1)
+
+Grid cards per active call: timer, intent guess, live transcript, barge/whisper for owner/admin.
+
+Kill switch: transfer to human, hang-up, or pause agent tools.
+
+Lag/ASR stats.
+
+5) Jobs /jobs
+
+Views
+
+List: columns = Time window, Contact, Address, Status, Tech, Source (call id), Est $.
+
+Calendar: Day/Week. Drag to reschedule; collision detection; travel time overlay using service area + tech last job location.
+
+Filters
+
+Status, Assigned tech, Date, Source intent.
+
+Actions
+
+New Job: modal from scratch or seeded by a call.
+
+Assign tech: dropdown; notify tech by SMS/Push.
+
+Reschedule: drag or edit; auto-update calendar event + SMS customer.
+
+Cancel: reason required (enum); optional refund note.
+
+Automations
+
+SMS reminders: T-24h and T-2h; “Reply C to confirm, R to reschedule”.
+
+“No-show detector”: if tech did not tap “On site” by slot_start+X → alert.
+
+Acceptance
+
+Moving a job persists; conflicting overlaps warn; time zone safe.
+
+6) Job Detail Drawer /jobs/:id
+
+Header: status stepper new → scheduled → en_route → on_site → done | cancelled
+
+Sections
+
+When & Where: slot, address with map, travel ETA, customer window preference.
+
+Customer: contact card; call/SMS buttons; history.
+
+Task: checklist items; add/delete; SOP link preview.
+
+Photos: upload before/after; compress client-side; store S3.
+
+Charges: estimate vs final; add line items; tax; “Send invoice” (future).
+
+Timeline: status changes with timestamps (tech taps from mobile portal).
+
+Links: originating call, recordings.
+
+Actions
+
+Status buttons; on done → request review SMS with link.
+
+Generate PDF job card (server-side render).
+
+Acceptance
+
+Signature capture on mobile; required before “done” if enabled.
+
+7) Numbers /numbers
+
+List
+
+DID, Label, Mode (ai/human/overflow), A2P status, Budget cap, After-hours behavior.
+
+Add Number wizard
+
+Choose: Buy new (provider) or Port existing (collect LOA docs).
+
+Area preference; capabilities; assign label.
+
+Routing:
+
+Mode (AI primary; human; overflow).
+
+Hours matrix; holidays.
+
+Overflow: forward to phone/email; ring group (future).
+
+Compliance:
+
+Recording opt-in toggle; initial disclaimer script.
+
+Confirm → provision via provider API → show test code.
+
+Per-Number settings
+
+Hours grid (Mon–Sun, multiple windows).
+
+After-hours mode (AI/VM/Forward).
+
+Overflow target (phone, email).
+
+Minute budget cap; alert threshold; auto-disable toggle.
+
+Test call: place bot call, returns health report.
+
+A2P 10DLC
+
+Wizard (see A2P page below).
+
+Show brand/campaign statuses, error codes; resend vetting.
+
+Acceptance
+
+All changes audited; test call returns PASS/FAIL with diagnostics.
+
+8) SOPs /sops
+
+Library
+
+Category tree; search.
+
+Columns: Title, Version, Published, Bound to Agent (count).
+
+Editor
+
+Markdown with blocks: Steps, Q/A, Decision trees (simple YAML).
+
+Variables: {{service_area}}, {{business_hours}}, {{owner_name}}.
+
+Attachments: images, PDFs.
+
+Versioning: save as draft, publish; change log diff viewer.
+
+Bind to Agent
+
+Multi-select which SOPs feed the AgentConfig.
+
+Priority order—top wins on conflicts.
+
+Testing
+
+“Ask SOP” prompt box; run agent locally using only SOPs; returns answer + citation to sections used.
+
+Acceptance
+
+Publishing creates new immutable version; rollback button; every binding recorded.
+
+9) Jarvis – Agent Studio /jarvis
+
+Sections
+
+Runtime
+
+Model, voice, temperature, latency profile.
+
+Tools toggles: calendar, maps, payment capture (future), SMS/email.
+
+Prompts
+
+System prompt editor + preview tokens.
+
+Few-shot examples: call opening, booking, escalation, spam.
+
+Policies
+
+Safety rules (no diagnoses, defer pricing if >X$).
+
+Escalation rules:
+
+Triggers: keywords, high emergency score, low confidence, duration>Y.
+
+Actions: SMS owner, call transfer, email escalation target.
+
+Booking Rules
+
+Time windows, service areas, job types, buffers.
+
+Calendar connection selection.
+
+SOP Bindings
+
+The ordered list from SOPs.
+
+Testing
+
+Call simulator: type scenario text or upload audio; run; see transcript/latency/intent; single-click “Create Job from test”.
+
+A/B: define Variant B prompt; run 5 scripted scenarios; compare metrics.
+
+Publishing
+
+Draft vs Published versions; changelog; rollback.
+
+Acceptance
+
+Test run produces a Call record flagged simulated=true for analytics without impacting KPIs unless chosen.
+
+10) Settings /settings
+
+Business hours
+
+Weekly grid + exceptions (holidays). Stored in numbers.hours or workspace default.
+
+Escalation target
+
+Email, phone for SMS, Slack webhook URL.
+
+Overflow
+
+Enable, targets, ring strategy.
+
+Budget cap
+
+Minutes per month; hard stop vs soft alert.
+
+Retention
+
+Call media retention days; transcript redaction rules.
+
+Notifications
+
+Per-role defaults; per-user overrides.
+
+Workspace
+
+Name, timezone, service area polygons upload (GeoJSON).
+
+Acceptance
+
+Saving any block triggers validation; async provisioning tasks queued and surfaced in a toast with progress.
+
+11) Users & Roles /admin/users (for owner/admin)
+
+Invite by email → role picker.
+
+Table: user, role, last active, 2FA enabled.
+
+Role policy matrix view.
+
+Suspend user; transfer ownership.
+
+12) Audit Log /admin/audit
+
+Filter by actor, target, action, date.
+
+Diff viewer for before/after.
+
+13) Integrations /integrations
+
+Google Calendar / Microsoft
+
+Connect button (OAuth). Select calendar. Health ping.
+
+Twilio
+
+SID/Auth; verify; buy numbers permission check.
+
+Retell/VAPI
+
+API key; voice list sync; test call.
+
+Status cards with last webhook received timestamp and failures.
+
+14) A2P 10DLC Wizard /a2p
+
+Brand
+
+Business legal info; EIN/Tax; address; website; contact; stock/exchange if any.
+
+Submit → store a2p_brand_status.
+
+Campaign
+
+Use case: “Customer Care / Notifications”.
+
+Sample messages with opt-in/opt-out language.
+
+Link numbers to this campaign.
+
+Compliance
+
+Auto-insert HELP/STOP handling into SMS flows.
+
+Status
+
+Show vetting result, fees, TCR IDs.
+
+Acceptance
+
+Until approved, SMS send path stays disabled except registration notifications.
+
+15) Webhooks & API /developer
+
+Generate/rotate secret.
+
+Event types:
+
+call.created, call.updated, job.created, job.updated, number.provisioned, a2p.status_changed.
+
+Retry policy exponential backoff; DLQ viewer.
+
+Event flows (exact)
+Inbound call
+
+PSTN → Twilio DID → webhook to Retell/VAPI session w/ AgentConfig.
+
+Agent answers; logs interim transcript; extracts entities; proposes intent.
+
+If intent=emergency OR booking criteria met:
+
+Calls internal Booking Service:
+
+Resolve hours and available slots (Calendar).
+
+Create jobs row (status scheduled).
+
+Send SMS confirmation (A2P).
+
+On hangup:
+
+Finalize calls row (duration, disposition).
+
+Upload recording → S3, run STT if not provided.
+
+Enqueue NLP post-processor:
+
+Summarize, compute value_est (heuristics by intent), spam/emergency scores.
+
+If low confidence OR escalation rule hit → set escalation_status='queued' and notify.
+
+Failure modes
+
+Calendar API fails → create Job in new w/ placeholder; mark alert.
+
+SMS blocked (A2P) → log, show toast on Overview Alerts.
+
+Outbound callback
+
+Dispatcher clicks “Call back” → softphone originate via Retell/Twilio; record as direction='out', link to contact.
+
+SMS flows
+
+Confirmation: “You’re booked for {slot}. Reply C to confirm, R to reschedule, STOP to opt out.” Store opt-out per number/contact.
+
+Reminder T-24h / T-2h per job; update jobs on confirm/reschedule replies.
+
+State machines
+
+Call.disposition
+
+answered → booked (if job created) | callback | spam
+
+missed (no answer or after-hours fallback)
+
+Terminal: booked|missed|spam|callback
+
+Job.status
+
+new → scheduled → en_route → on_site → done
+
+Cancellation allowed from new|scheduled|en_route with reason.
+
+A2P
+
+brand: none|submitted|approved|rejected
+
+campaign: none|submitted|approved|rejected|suspended
+
+AgentConfig.status
+
+draft|published
+
+Calculations (analytics truth)
+
+Answered % = count(calls where disposition in answered|booked|callback|spam? choose) / count(all inbound).
+
+For dashboard: treat spam excluded from denominator if spam_score>=threshold.
+
+Bookings = count(calls where job_id not null).
+
+Missed Value = sum(value_est) where disposition='missed' and spam_score<threshold.
+
+Avg Handle = avg(duration where disposition in answered|booked).
+
+Materialize daily rollups in call_daily_rollups(workspace_id, date, inbound, answered, missed, booked, spam, value_est_sum).
+
+API contracts (sample)
+GET /api/calls?workspace_id=...&from=...&to=...&intent=emergency,faq&cursor=...
+200 { items: Call[], nextCursor?: string }
+
+GET /api/calls/:id
+200 { call, contact?, job? }
+
+POST /api/jobs
+body { workspace_id, contact_id, slot_start, slot_end, address, notes, source_call_id }
+201 { job }
+
+PATCH /api/jobs/:id
+body { status?, slot_start?, slot_end?, assigned_to?, notes?, final_cents? }
+200 { job }
+
+POST /api/numbers
+body { areaCode?, label, routing, hours, after_hours, recording_opt_in }
+201 { number, vendor: { sid, capability } }
+
+POST /api/a2p/brand
+POST /api/a2p/campaign
+
+POST /api/jarvis/test-run
+body { agent_config_id, script_text?, audio_url? }
+201 { call_id, metrics }
+
+Background jobs
+
+Post-call NLP: summarization, entity extraction, estimate, flags.
+
+A2P sync: poll statuses daily.
+
+Calendar reconcile: ensure event exists/updated.
+
+Media retention: delete recordings after N days if policy.
+
+Daily digest: email KPIs + alerts.
+
+Permission matrix (high-level)
+
+Owner/Admin: all.
+
+Dispatcher: read/write calls, jobs, contacts; edit numbers hours/overflow; no billing.
+
+Tech: read assigned jobs; update status; upload photos; no access to Calls list.
+
+Viewer: read-only KPIs and lists; no media downloads unless allowed.
+
+Acceptance tests (per page, high-value)
+
+Calls List
+
+Filter by intent=emergency returns only emergency.
+
+Bulk “Mark spam” sets disposition='spam' and hides from Missed Value.
+
+New inbound call appears within 2s on WebSocket.
+
+Call Drawer
+
+Create Job populates job row, sends SMS (mock), links back to call.
+
+Transcript search finds a phrase and seeks audio.
+
+Jobs Calendar
+
+Drag reschedule updates slot and sends new SMS; old calendar event deleted.
+
+Numbers
+
+Provision new DID stores Twilio SID; Test Call returns PASS.
+
+A2P
+
+Submitting brand without EIN fails validation; with EIN passes to submitted.
+
+Jarvis Test
+
+Running scenario creates calls.simulated=true and shows latency breakdown.
+
+Non-functional
+
+P95 RSC page load < 1.2s on list pages with 1k rows (server pagination).
+
+All mutating endpoints idempotent (Idempotency-Key header).
+
+Audit every write with actor and diff.
+
+Redaction: by default mask phone/email in transcripts unless toggled by admin.
+
+Implementation milestone plan
+
+M1 – Data + Calls core
+
+DB, RBAC, Calls list/drawer, Post-call pipeline, basic Overview.
+
+M2 – Jobs & Calendar
+
+Create from call, SMS confirms, reminders, Job drawer.
+
+M3 – Numbers & A2P
+
+Provision, hours/overflow, A2P wizard, Alerts.
+
+M4 – SOPs & Jarvis Studio
+
+SOP editor/bindings, test simulator, publish agent.
+
+M5 – Settings, Integrations, Audit
+
+Business hours, escalations, Google Calendar connect, Audit log.
+
+M6 – Realtime & Live Monitor
+
+WebSocket feed, live supervise view.

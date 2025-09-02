@@ -1,0 +1,138 @@
+/* app/globals.css */
+@import "@fontsource-variable/inter";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Colors from Venlyn Ops Style Guide */
+    --canvas: #F6F7F8;
+    --surface: #FFFFFF;
+    --surface-elevated: #FFFFFF;
+    --border: #ECEDEF;
+    --border-subtle: #F1F5F9;
+    --text-primary: #0B0D12;
+    --text-secondary: #6B7280;
+    --text-tertiary: #94A3B8;
+    
+    /* Shadows from style guide */
+    --shadow-card: 0 1px 0 rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+    --shadow-card-hover: 0 1px 0 rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.08);
+    --shadow-floating: 0 1px 0 rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.10);
+    
+    /* Sidebar gradient */
+    --sidebar-bg: linear-gradient(180deg, #1E293B 0%, #334155 100%);
+    
+    --radius: 12px;
+    --radius-lg: 24px;
+  }
+  
+  html, body { 
+    background: var(--canvas); 
+    color: var(--text-primary); 
+  }
+  
+  body { 
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11"; 
+  }
+}
+
+@layer components {
+  /* Main floating card style matching screenshot */
+  .venlyn-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: 1.5rem;
+    transition: all 0.2s ease-in-out;
+  }
+  
+  .venlyn-card:hover {
+    box-shadow: var(--shadow-card-hover);
+    transform: translateY(-1px);
+  }
+  
+  /* Sidebar glass effect */
+  .glass-sidebar {
+    background: var(--sidebar-bg);
+    backdrop-filter: blur(20px);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: var(--shadow-floating);
+  }
+  
+  /* Focus ring for accessibility */
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 focus:ring-offset-transparent;
+  }
+  
+  /* Text utilities */
+  .text-mono {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum";
+  }
+  
+  /* Badge styles matching screenshot */
+  .venlyn-pill {
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  
+  /* Intent badges */
+  .intent-emergency {
+    @apply bg-red-50 text-red-700 border-red-200;
+  }
+  
+  .intent-routine {
+    @apply bg-blue-50 text-blue-700 border-blue-200;
+  }
+  
+  .intent-faq {
+    @apply bg-amber-50 text-amber-700 border-amber-200;
+  }
+  
+  .intent-spam {
+    @apply bg-yellow-50 text-yellow-700 border-yellow-200;
+  }
+  
+  /* Disposition badges */
+  .disposition-answered {
+    @apply bg-green-50 text-green-700 border-green-200;
+  }
+  
+  .disposition-missed {
+    @apply bg-red-50 text-red-700 border-red-200;
+  }
+  
+  .disposition-booked {
+    @apply bg-blue-50 text-blue-700 border-blue-200;
+  }
+  
+  .disposition-spam {
+    @apply bg-yellow-50 text-yellow-700 border-yellow-200;
+  }
+  
+  .disposition-routine {
+    @apply bg-amber-50 text-amber-700 border-amber-200;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
