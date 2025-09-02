@@ -19,16 +19,12 @@ import { Search, Filter, Download, Play, MessageSquare, Plus } from 'lucide-reac
 
 const formatDate = (dateString: string) => {
   const date = new Date(dateString);
-  const now = new Date();
-  const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
-  
-  if (diffInMinutes < 60) {
-    return `${diffInMinutes}m ago`;
-  } else if (diffInMinutes < 1440) {
-    return `${Math.floor(diffInMinutes / 60)}h ago`;
-  } else {
-    return date.toLocaleDateString();
-  }
+  return date.toLocaleDateString('en-US', { 
+    month: 'short', 
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 };
 
 const formatPhoneNumber = (e164: string) => {
