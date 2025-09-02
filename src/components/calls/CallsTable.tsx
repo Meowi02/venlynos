@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { Call } from '@/types/core';
-import { FixedSizeList as List } from 'react-window';
+// import { FixedSizeList as List } from 'react-window'; // Temporarily disabled for dependency issues
 
 interface CallsTableProps {
   onCallClick: (callId: string) => void;
