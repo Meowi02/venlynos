@@ -11,6 +11,16 @@ export type NumberStatus = 'active' | 'suspended';
 export type RoutingMode = 'ai' | 'human' | 'overflow';
 export type AfterHoursMode = 'ai' | 'vm' | 'forward';
 
+// New enums from database schema
+export type QueueStatus = 'none' | 'triage' | 'followup';
+export type CallSource = 'phone' | 'web_callback' | 'manual' | 'transfer';
+export type LeadSource = 'google_maps' | 'website' | 'referral' | 'ad' | 'unknown';
+export type SpamReason = 'robocall' | 'telemarketer' | 'repeat_silent';
+export type PreferredChannel = 'call' | 'sms' | 'email';
+export type FollowUpType = 'callback' | 'sms' | 'email' | 'task';
+export type FollowUpStatus = 'open' | 'done';
+export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
+
 // Core interfaces
 export interface Contact {
   id: string;
@@ -21,6 +31,9 @@ export interface Contact {
   address?: any;
   notes?: string;
   lastSeenAt?: string;
+  doNotContact: boolean;
+  preferredChannel?: PreferredChannel;
+  timeWindows: any[]; // array of {day:'Mon',start:'08:00',end:'18:00'}
   createdAt: string;
 }
 
@@ -45,6 +58,19 @@ export interface Call {
   transcript?: any;
   jobId?: string;
   escalationStatus?: EscalationStatus;
+  // New fields from spec
+  queueStatus: QueueStatus;
+  outcomeRequired: boolean;
+  outcomeAt?: string;
+  source: CallSource;
+  leadSource: LeadSource;
+  tags: string[];
+  consent?: any; // {recording:boolean; smsOptIn:boolean; lastUpdated:datetime}
+  doNotContact: boolean;
+  followUps: any[]; // array of follow-up objects
+  attachments: any[]; // array of attachment objects
+  carrierInfo?: any; // {carrier:string?, lineType:'mobile'|'landline'|'voip'|'unknown'}
+  spamReason?: SpamReason;
   createdAt: string;
 }
 
@@ -113,6 +139,21 @@ export interface SOP {
   updatedAt: string;
 }
 
+export interface FollowUpTask {
+  id: string;
+  workspaceId: string;
+  callId?: string;
+  contactId?: string;
+  type: FollowUpType;
+  dueAt: string;
+  assignedTo?: string;
+  status: FollowUpStatus;
+  priority: TaskPriority;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AuditEvent {
   id: string;
   workspaceId: string;
@@ -136,6 +177,16 @@ export const numberStatusSchema = z.enum(['active', 'suspended']);
 export const routingModeSchema = z.enum(['ai', 'human', 'overflow']);
 export const afterHoursModeSchema = z.enum(['ai', 'vm', 'forward']);
 
+// New schemas from spec
+export const queueStatusSchema = z.enum(['none', 'triage', 'followup']);
+export const callSourceSchema = z.enum(['phone', 'web_callback', 'manual', 'transfer']);
+export const leadSourceSchema = z.enum(['google_maps', 'website', 'referral', 'ad', 'unknown']);
+export const spamReasonSchema = z.enum(['robocall', 'telemarketer', 'repeat_silent']);
+export const preferredChannelSchema = z.enum(['call', 'sms', 'email']);
+export const followUpTypeSchema = z.enum(['callback', 'sms', 'email', 'task']);
+export const followUpStatusSchema = z.enum(['open', 'done']);
+export const taskPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
+
 export const contactSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
@@ -145,6 +196,9 @@ export const contactSchema = z.object({
   address: z.any().optional(),
   notes: z.string().optional(),
   lastSeenAt: z.string().datetime().optional(),
+  doNotContact: z.boolean(),
+  preferredChannel: preferredChannelSchema.optional(),
+  timeWindows: z.array(z.any()),
   createdAt: z.string().datetime(),
 });
 
@@ -169,6 +223,19 @@ export const callSchema = z.object({
   transcript: z.any().optional(),
   jobId: z.string().optional(),
   escalationStatus: escalationStatusSchema.optional(),
+  // New fields from spec
+  queueStatus: queueStatusSchema,
+  outcomeRequired: z.boolean(),
+  outcomeAt: z.string().datetime().optional(),
+  source: callSourceSchema,
+  leadSource: leadSourceSchema,
+  tags: z.array(z.string()),
+  consent: z.any().optional(),
+  doNotContact: z.boolean(),
+  followUps: z.array(z.any()),
+  attachments: z.array(z.any()),
+  carrierInfo: z.any().optional(),
+  spamReason: spamReasonSchema.optional(),
   createdAt: z.string().datetime(),
 });
 
@@ -237,6 +304,21 @@ export const sopSchema = z.object({
   updatedAt: z.string().datetime(),
 });
 
+export const followUpTaskSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  callId: z.string().optional(),
+  contactId: z.string().optional(),
+  type: followUpTypeSchema,
+  dueAt: z.string().datetime(),
+  assignedTo: z.string().optional(),
+  status: followUpStatusSchema,
+  priority: taskPrioritySchema,
+  note: z.string().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
 export const auditEventSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
@@ -261,3 +343,6 @@ export const updateJobSchema = createJobSchema.partial();
 
 export const createNumberCfgSchema = numberCfgSchema.omit({ id: true, createdAt: true, updatedAt: true });
 export const updateNumberCfgSchema = createNumberCfgSchema.partial();
+
+export const createFollowUpTaskSchema = followUpTaskSchema.omit({ id: true, createdAt: true, updatedAt: true });
+export const updateFollowUpTaskSchema = createFollowUpTaskSchema.partial();
