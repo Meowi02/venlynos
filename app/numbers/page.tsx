@@ -239,6 +239,7 @@ export default function NumbersPage() {
             </DialogContent>
           </Dialog>
         </div>
+        </div>
       </div>
 
       {/* Numbers Table */}

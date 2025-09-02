@@ -66,11 +66,13 @@ const statusColumns = [
 ];
 
 const formatTime = (isoString: string) => {
-  return new Date(isoString).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
+  // Static time formatting to prevent hydration issues
+  const date = new Date(isoString);
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 || 12;
+  return `${displayHours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
 };
 
 const formatCurrency = (cents: number) => {
