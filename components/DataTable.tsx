@@ -30,7 +30,7 @@ export default function DataTable<TData, TValue>({
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id} className="border-b border-border">
               {hg.headers.map((header) => (
-                <th key={header.id} className="text-left px-0 py-3 text-sm font-semibold text-text-primary">
+                <th key={header.id} className="text-left px-4 py-3 text-sm font-semibold text-text-primary">
                   {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                 </th>
               ))}
@@ -45,7 +45,7 @@ export default function DataTable<TData, TValue>({
               onClick={() => onRowClick?.(row.original as TData)}
             >
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-0 py-4 text-sm">
+                <td key={cell.id} className="px-4 py-3 text-sm">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}

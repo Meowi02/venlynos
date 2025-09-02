@@ -1,0 +1,388 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Multitenancy models
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  workspaceUsers WorkspaceUser[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  timezone  String   @default("America/New_York") @map("tz")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  workspaceUsers WorkspaceUser[]
+  contacts       Contact[]
+  calls          Call[]
+  jobs           Job[]
+  numbers        Number[]
+  agentConfigs   AgentConfig[]
+  sops           SOP[]
+  followUpTasks  FollowUpTask[]
+  auditEvents    AuditEvent[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceUser {
+  workspaceId String    @map("workspace_id")
+  userId      String    @map("user_id")
+  role        Role
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, userId])
+  @@map("workspace_users")
+}
+
+enum Role {
+  owner
+  admin
+  dispatcher
+  tech
+  viewer
+}
+
+// Core business models
+model Contact {
+  id         String    @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  name       String?
+  phones     String[]
+  email      String?
+  address    Json?
+  notes      String?
+  lastSeenAt DateTime? @map("last_seen_at")
+  
+  // New fields from spec
+  doNotContact     Boolean            @default(false) @map("do_not_contact")
+  preferredChannel PreferredChannel?  @map("preferred_channel")
+  timeWindows      Json[]             @default([]) @map("time_windows") // array of {day:'Mon',start:'08:00',end:'18:00'}
+  
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  calls     Call[]
+  jobs      Job[]
+  followUpTasks FollowUpTask[]
+
+  @@index([phones], type: Gin)
+  @@index([workspaceId, createdAt])
+  @@map("contacts")
+}
+
+model Call {
+  id                String             @id @default(cuid())
+  workspaceId       String             @map("workspace_id")
+  startedAt         DateTime           @map("started_at")
+  endedAt           DateTime?          @map("ended_at")
+  durationSec       Int?               @map("duration_sec")
+  direction         CallDirection
+  fromE164          String             @map("from_e164")
+  toE164            String             @map("to_e164")
+  contactId         String?            @map("contact_id")
+  agentType         AgentType          @map("agent_type")
+  intent            Intent?
+  disposition       CallDisposition?
+  valueEstCents     Int?               @map("value_est_cents")
+  emergencyScore    Int?               @map("emergency_score")
+  spamScore         Int?               @map("spam_score")
+  recordingUrl      String?            @map("recording_url")
+  transcriptUrl     String?            @map("transcript_url")
+  transcript        Json?
+  jobId             String?            @map("job_id")
+  escalationStatus  EscalationStatus?  @map("escalation_status")
+  
+  // New fields from spec
+  queueStatus       QueueStatus        @default(none) @map("queue_status")
+  outcomeRequired   Boolean            @default(false) @map("outcome_required")
+  outcomeAt         DateTime?          @map("outcome_at")
+  source            CallSource         @default(phone)
+  leadSource        LeadSource         @default(unknown) @map("lead_source")
+  tags              String[]
+  consent           Json?              // {recording:boolean; smsOptIn:boolean; lastUpdated:datetime}
+  doNotContact      Boolean            @default(false) @map("do_not_contact")
+  followUps         Json[]             @default([]) @map("follow_ups") // array of follow-up objects
+  attachments       Json[]             @default([]) // array of attachment objects
+  carrierInfo       Json?              @map("carrier_info") // {carrier:string?, lineType:'mobile'|'landline'|'voip'|'unknown'}
+  spamReason        SpamReason?        @map("spam_reason")
+  
+  createdAt         DateTime           @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact   Contact?  @relation(fields: [contactId], references: [id])
+  job       Job?      @relation(fields: [jobId], references: [id])
+  followUpTasks FollowUpTask[]
+
+  @@index([workspaceId, startedAt])
+  @@index([workspaceId, intent])
+  @@index([workspaceId, disposition])
+  @@index([workspaceId, queueStatus])
+  @@index([workspaceId, outcomeRequired])
+  @@index([contactId])
+  @@index([tags], type: Gin)
+  @@map("calls")
+}
+
+model Job {
+  id            String    @id @default(cuid())
+  workspaceId   String    @map("workspace_id")
+  title         String?
+  status        JobStatus
+  slotStart     DateTime? @map("slot_start")
+  slotEnd       DateTime? @map("slot_end")
+  address       Json?
+  contactId     String?   @map("contact_id")
+  sourceCallId  String?   @map("source_call_id")
+  assignedTo    String?   @map("assigned_to")
+  estimateCents Int?      @map("estimate_cents")
+  finalCents    Int?      @map("final_cents")
+  checklist     Json?
+  photos        Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact   Contact?  @relation(fields: [contactId], references: [id])
+  calls     Call[]
+
+  @@index([workspaceId, slotStart])
+  @@index([workspaceId, status])
+  @@index([assignedTo])
+  @@map("jobs")
+}
+
+model Number {
+  id                 String            @id @default(cuid())
+  workspaceId        String            @map("workspace_id")
+  e164               String            @unique
+  label              String?
+  status             NumberStatus
+  routingMode        RoutingMode       @map("routing_mode")
+  hours              Json
+  afterHours         AfterHoursMode    @map("after_hours")
+  overflowTarget     Json?             @map("overflow_target")
+  minuteBudgetCap    Int?              @map("minute_budget_cap")
+  recordingOptIn     Boolean           @map("recording_opt_in")
+  a2pBrandStatus     String?           @map("a2p_brand_status")
+  a2pCampaignStatus  String?           @map("a2p_campaign_status")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("numbers")
+}
+
+model AgentConfig {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  name         String
+  version      Int
+  isActive     Boolean  @map("is_active")
+  runtime      Json
+  tools        Json
+  prompts      Json
+  policies     Json
+  escalation   Json
+  bookingRules Json     @map("booking_rules")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, isActive])
+  @@map("agent_configs")
+}
+
+model SOP {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  title        String
+  content      String
+  version      Int
+  isPublished  Boolean  @map("is_published")
+  agentConfigs Json     @map("agent_configs")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, isPublished])
+  @@map("sops")
+}
+
+model FollowUpTask {
+  id          String           @id @default(cuid())
+  workspaceId String           @map("workspace_id")
+  callId      String?          @map("call_id")
+  contactId   String?          @map("contact_id")
+  type        FollowUpType
+  dueAt       DateTime         @map("due_at")
+  assignedTo  String?          @map("assigned_to")
+  status      FollowUpStatus   @default(open)
+  priority    TaskPriority     @default(normal)
+  note        String?
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  call      Call?     @relation(fields: [callId], references: [id])
+  contact   Contact?  @relation(fields: [contactId], references: [id])
+
+  @@index([workspaceId, status, dueAt])
+  @@index([assignedTo])
+  @@map("follow_up_tasks")
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  actor       String
+  action      String
+  target      String
+  targetId    String   @map("target_id")
+  diff        Json?
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([targetId])
+  @@map("audit_events")
+}
+
+// Enums for the schema
+enum CallDirection {
+  in
+  out
+}
+
+enum AgentType {
+  ai
+  human
+}
+
+enum Intent {
+  emergency
+  routine
+  quote
+  faq
+  billing
+  spam
+}
+
+enum CallDisposition {
+  answered
+  missed
+  booked
+  spam
+  callback
+}
+
+enum JobStatus {
+  new
+  scheduled
+  en_route
+  on_site
+  done
+  cancelled
+}
+
+enum EscalationStatus {
+  none
+  queued
+  sent
+  acked
+}
+
+enum NumberStatus {
+  active
+  suspended
+}
+
+enum RoutingMode {
+  ai
+  human
+  overflow
+}
+
+enum AfterHoursMode {
+  ai
+  vm
+  forward
+}
+
+// New enums from spec
+enum QueueStatus {
+  none
+  triage
+  followup
+}
+
+enum CallSource {
+  phone
+  web_callback
+  manual
+  transfer
+}
+
+enum LeadSource {
+  google_maps
+  website
+  referral
+  ad
+  unknown
+}
+
+enum SpamReason {
+  robocall
+  telemarketer
+  repeat_silent
+}
+
+enum PreferredChannel {
+  call
+  sms
+  email
+}
+
+enum FollowUpType {
+  callback
+  sms
+  email
+  task
+}
+
+enum FollowUpStatus {
+  open
+  done
+}
+
+enum TaskPriority {
+  low
+  normal
+  high
+  urgent
+}
