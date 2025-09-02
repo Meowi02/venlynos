@@ -12,7 +12,7 @@ import {
   DrawerContent,
   DrawerTrigger,
 } from '@/components/ui/drawer';
-import CallDetailDrawer from '@/components/CallDetailDrawer';
+import CallDetailDrawer from '../../components/CallDetailDrawer';
 import { calls, CallItem } from '@/lib/data';
 import { formatDuration, formatCurrency } from '@/lib/utils';
 import { Search, Filter, Download, Play, MessageSquare, Plus } from 'lucide-react';
